@@ -204,7 +204,7 @@ async def post_init(application: Application):
 
 # ===================== ЗАПУСК =====================
 def main():
-    app = Application.builder().token(TOKEN).post_init(post_init).build()
+    app = Application.builder().token(TOKEN).job_queue(True).post_init(post_init).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("set", set_reminder))
