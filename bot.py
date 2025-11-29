@@ -149,9 +149,10 @@ async def set_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Зберігаємо
     save_reminder(chat_id, msg_text, days_tuple, time_raw)
 
-    # Видаляємо старі job
-    for job in context.job_queue.jobs():
-        if getattr(job, "data", None) == chat_id:
+    # Видаляємо старі job (безпечний цикл — фікс помилки)
+    current_jobs = context.job_queue.jobs()
+    for job in current_jobs:
+        if job is not None and getattr(job, "data", None) == chat_id:
             job.schedule_removal()
 
     # Нове завдання
