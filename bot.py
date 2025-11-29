@@ -1,14 +1,17 @@
 # bot.py
 import logging
 import os
-import re
 import sqlite3
 from contextlib import closing
 from datetime import time as dtime
 
 import pytz
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    ContextTypes,
+)
 
 # ===================== НАЛАШТУВАННЯ =====================
 TOKEN = os.getenv("TOKEN")
@@ -76,108 +79,77 @@ def get_all_reminders():
 
 init_db()
 
-# ===================== ДНІ ТИЖНЯ ТА ПАРСЕР =====================
-
+# ===================== ДНІ ТИЖНЯ =====================
 DAYS_MAP = {
-    # понеділок
-    "пн": 0, "пн.": 0, "пон": 0, "понеділок": 0, "понедельник": 0,
-    # вівторок
-    "вт": 1, "вт.": 1, "вівт": 1, "вівторок": 1, "вторник": 1,
-    # середа
-    "ср": 2, "ср.": 2, "сер": 2, "середа": 2, "среда": 2,
-    # четвер
-    "чт": 3, "чт.": 3, "чтв": 3, "четвер": 3, "четв": 3,
-    # п'ятниця
-    "пт": 4, "пт.": 4, "п'т": 4, "п'ятниця": 4, "пятниця": 4, "пят": 4,
-    # субота
-    "сб": 5, "сб.": 5, "суб": 5, "субота": 5, "суббота": 5,
-    # неділя
-    "нд": 6, "нд.": 6, "нед": 6, "неділя": 6, "воскресення": 6, "воскресенье": 6,
-    # універсальні
-    "щодня": (0,1,2,3,4,5,6), "щоденно": (0,1,2,3,4,5,6),
-    "кожен день": (0,1,2,3,4,5,6), "кожного дня": (0,1,2,3,4,5,6),
-    "каждый день": (0,1,2,3,4,5,6)
+    "пн": 0, "пон": 0, "понеділок": 0,
+    "вт": 1, "вів": 1, "вівторок": 1,
+    "ср": 2, "сер": 2, "середа": 2,
+    "чт": 3, "чет": 3, "четвер": 3,
+    "пт": 4, "п'ят": 4, "п'ятниця": 4,
+    "сб": 5, "суб": 5, "субота": 5,
+    "нд": 6, "нед": 6, "неділя": 6,
+    "щодня": (0,1,2,3,4,5,6), "кожен день": (0,1,2,3,4,5,6),
 }
 
-def normalize_token(tok: str) -> str:
-    if not tok:
-        return tok
-    tok = tok.replace("\u200b", "").replace("\u2060", "").strip()
-    tok = tok.replace("’", "'").replace("`", "'").replace("ʼ", "'")
-    tok = tok.strip(".,;:()[]\"'").lower()
-    tok = re.sub(r"\s+", " ", tok)
-    return tok
+WEEKDAY_NAMES = ["пн", "вт", "ср", "чт", "пт", "сб", "нд"]
 
-def parse_days(days_raw: str):
-    if not days_raw:
+def parse_days(text: str):
+    if not text:
         return ()
-    s = days_raw.lower()
-    # роздільники: кома, крапка з комою, слеш, пробіли
-    s = s.replace(",", " ").replace(";", " ").replace("/", " ")
-    parts = [normalize_token(p) for p in s.split() if normalize_token(p)]
-    days = []
-    for p in parts:
-        if p in DAYS_MAP:
-            val = DAYS_MAP[p]
+    words = text.lower().replace(",", " ").replace(";", " ").split()
+    days = set()
+    for word in words:
+        word = word.strip(".,:!?")
+        if word in DAYS_MAP:
+            val = DAYS_MAP[word]
             if isinstance(val, tuple):
-                return tuple(val)
-            if val not in days:
-                days.append(val)
-        else:
-            # спробуємо знаходження по префіксу (наприклад "четв" -> "четвер")
-            for key, val in DAYS_MAP.items():
-                if isinstance(val, int) and p.startswith(key):
-                    if val not in days:
-                        days.append(val)
-                    break
-    return tuple(sorted(days))
+                return val
+            days.add(val)
+    return tuple(sorted(days)) if days else ()
 
-WEEKDAY_NAMES = ["пн","вт","ср","чт","пт","сб","нд"]
-
-# ===================== ХЕНДЛЕРИ =====================
-
+# ===================== КОМАНДИ =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Привіт! Я бот-нагадувач.\n\n"
+        "Привіт! Я бот-нагадувач\n\n"
         "Формат:\n"
         "`/set Текст | дні | HH:MM`\n\n"
         "Приклади:\n"
-        "• `/set Урок | пн, ср | 17:45`\n"
-        "• `/set ТЕСТ | субота,п'ятниця,четвер | 15:30`\n"
+        "• `/set Урок | пн ср пт | 17:45`\n"
+        "• `/set Заняття | субота | 15:30`\n"
         "• `/set Пити воду | щодня | 10:00`\n"
-        "• `/list` — список поточних нагадувань\n"
-        "• `/stop` — вимкнути нагадування",
+        "• `/list` — що налаштовано\n"
+        "• `/stop` — вимкнути",
         parse_mode="Markdown"
     )
 
 async def list_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    allr = get_all_reminders()
     chat_id = update.effective_chat.id
-    r = next((x for x in allr if x["chat_id"] == chat_id), None)
+    r = next((x for x in get_all_reminders() if x["chat_id"] == chat_id), None)
     if not r:
-        await update.message.reply_text("Немає встановлених нагадувань для цього чату.")
+        await update.message.reply_text("Нагадувань немає")
         return
-    days_names = " ".join(WEEKDAY_NAMES[d] for d in r["days"]) if len(r["days"]) < 7 else "щодня"
-    await update.message.reply_text(f"Текст: {r['text']}\nДні: {days_names}\nЧас: {r['time']} (Київ)")
+    days_str = "щодня" if len(r["days"]) == 7 else " ".join(WEEKDAY_NAMES[d] for d in r["days"])
+    await update.message.reply_text(
+        f"Текст: {r['text']}\n"
+        f"Дні: {days_str}\n"
+        f"Час: {r['time']} (Київ)"
+    )
 
 async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     delete_reminder(chat_id)
-
     if context.job_queue:
         for job in context.job_queue.jobs():
-            # збережемо, що data може бути словником або простим chat_id
             data = getattr(job, "data", None)
-            if data == chat_id or (isinstance(data, dict) and data.get("chat_id") == chat_id):
+            if isinstance(data, dict) and data.get("chat_id") == chat_id:
                 job.schedule_removal()
-
-    await update.message.reply_text("Нагадування вимкнено для цього чату.")
+    await update.message.reply_text("Нагадування вимкнено")
 
 async def set_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     raw = update.message.text[len("/set"):].strip()
 
-    if "|" not in raw or raw.count("|") != 2:
+    if raw.count("|") != 2:
         await update.message.reply_text("Формат: `/set текст | дні | HH:MM`", parse_mode="Markdown")
         return
 
@@ -187,27 +159,27 @@ async def set_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         hh, mm = map(int, time_part.split(":"))
         if not (0 <= hh <= 23 and 0 <= mm <= 59):
-            raise ValueError()
-    except Exception:
-        await update.message.reply_text("Час у форматі HH:MM, наприклад 17:45")
+            raise ValueError
+    except:
+        await update.message.reply_text("Час у форматі HH:MM")
         return
 
     days_tuple = parse_days(days_part)
     if not days_tuple:
-        await update.message.reply_text("Не розпізнаю дні. Використай: `пн, вт, ср, чт, пт, сб, нд` або `щодня`.", parse_mode="Markdown")
+        await update.message.reply_text("Не зрозумів дні. Приклади: пн, ср, сб, щодня")
         return
 
-    # зберігаємо
+    # зберігаємо в БД
     save_reminder(chat_id, text_part, days_tuple, f"{hh:02d}:{mm:02d}")
 
-    # видаляємо старі job-и для цього чату
+    # видаляємо старі завдання
     if context.job_queue:
         for job in context.job_queue.jobs():
             data = getattr(job, "data", None)
-            if data == chat_id or (isinstance(data, dict) and data.get("chat_id") == chat_id):
+            if isinstance(data, dict) and data.get("chat_id") == chat_id:
                 job.schedule_removal()
 
-        # створюємо нове щоденне завдання з data як словник
+        # створюємо нове
         job_time = dtime(hour=hh, minute=mm, tzinfo=KYIV_TZ)
         context.job_queue.run_daily(
             callback=send_scheduled,
@@ -216,58 +188,36 @@ async def set_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
             data={"chat_id": chat_id},
             name=f"reminder_{chat_id}"
         )
-    else:
-        logger.warning("JobQueue не доступний — заплановано лише в БД.")
 
-    days_names = " ".join(WEEKDAY_NAMES[d] for d in days_tuple) if len(days_tuple) < 7 else "щодня"
+    days_str = "щодня" if len(days_tuple) == 7 else " ".join(WEEKDAY_NAMES[d] for d in days_tuple)
     await update.message.reply_text(
-        f"Нагадування встановлено!\n\nТекст: {text_part}\nДні: {days_names}\nЧас: {hh:02d}:{mm:02d} (Київ)"
+        f"Нагадування встановлено!\n\n"
+        f"Текст: {text_part}\n"
+        f"Дні: {days_str}\n"
+        f"Час: {hh:02d}:{mm:02d} (Київ)"
     )
 
 async def send_scheduled(context: ContextTypes.DEFAULT_TYPE):
-    # підтримка двох форматів data: або простий chat_id, або dict {"chat_id": ...}
-    data = getattr(context.job, "data", None)
-    if data is None:
-        logger.error("Job без data, неможливо визначити chat_id")
+    job = context.job
+    if not job or not job.data or job.data.get("chat_id") is None:
         return
-
-    chat_id = data if isinstance(data, int) else data.get("chat_id")
-    if not chat_id:
-        logger.error("Не знайдено chat_id у job.data: %s", data)
-        return
-
-    # знаходимо текст у базі
+    chat_id = job.data["chat_id"]
     reminders = [r for r in get_all_reminders() if r["chat_id"] == chat_id]
     if not reminders:
-        logger.info("Нагадування для %s не знайдено у БД — пропускаю", chat_id)
         return
-
-    text = reminders[0]["text"]
     try:
-        await context.bot.send_message(chat_id=chat_id, text=text)
-        logger.info("Надіслано нагадування до %s", chat_id)
+        await context.bot.send_message(chat_id=chat_id, text=reminders[0]["text"])
+        logger.info("Надіслано нагадування в %s", chat_id)
     except Exception as e:
-        logger.error("Помилка відправки в %s: %s", chat_id, e)
+        logger.error("Не вдалося надіслати в %s: %s", chat_id, e)
 
 # ===================== ВІДНОВЛЕННЯ ПІСЛЯ РЕСТАРТУ =====================
-
 async def post_init(application: Application):
-    # видаляємо webhook на старті, щоб уникнути конфліктів (409)
-    try:
-        await application.bot.delete_webhook(drop_pending_updates=True)
-    except Exception:
-        pass
-
-    logger.info("Відновлюю нагадування з БД...")
-    all_rem = get_all_reminders()
-    for r in all_rem:
+    await application.bot.delete_webhook(drop_pending_updates=True)
+    logger.info("Відновлюю нагадування з бази...")
+    for r in get_all_reminders():
         try:
             hh, mm = map(int, r["time"].split(":"))
-        except Exception:
-            logger.warning("Невірний час у записі %s — пропускаю", r)
-            continue
-
-        if application.job_queue:
             application.job_queue.run_daily(
                 callback=send_scheduled,
                 time=dtime(hour=hh, minute=mm, tzinfo=KYIV_TZ),
@@ -275,22 +225,24 @@ async def post_init(application: Application):
                 data={"chat_id": r["chat_id"]},
                 name=f"reminder_{r['chat_id']}"
             )
-        else:
-            logger.warning("JobQueue відсутній при post_init!")
+        except Exception as e:
+            logger.warning("Не вдалося відновити нагадування %s: %s", r["chat_id"], e)
+    logger.info("Відновлено %d нагадувань", len(get_all_reminders()))
 
-    logger.info("Відновлено %d нагадувань", len(all_rem))
-
-# ===================== СТАРТ =====================
-
+# ===================== ЗАПУСК =====================
 def main():
-    app = Application.builder().token(TOKEN).post_init(post_init).build()
+    app = Application.builder() \
+        .token(TOKEN) \
+        .job_queue(True) \
+        .post_init(post_init) \
+        .build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("set", set_reminder))
     app.add_handler(CommandHandler("stop", stop))
     app.add_handler(CommandHandler("list", list_reminders))
 
-    logger.info("Бот запущено")
+    logger.info("Бот запущено – працює в усіх чатах")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
