@@ -1,4 +1,4 @@
-# bot.py
+# bot.py — остаточна робоча версія (v21.5+, Koyeb, 2025)
 import logging
 import os
 import sqlite3
@@ -19,7 +19,7 @@ if not TOKEN:
     raise ValueError("Встанови змінну середовища TOKEN")
 
 KYIV_TZ = pytz.timezone("Europe/Kyiv")
-DB_PATH = "/tmp/reminders.db"  # Koyeb-friendly
+DB_PATH = "/tmp/reminders.db"
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -48,9 +48,7 @@ def save_reminder(chat_id: int, text: str, days: tuple, time_str: str):
                 INSERT INTO reminders (chat_id, text, days, time_str)
                 VALUES (?, ?, ?, ?)
                 ON CONFLICT(chat_id) DO UPDATE SET
-                  text=excluded.text,
-                  days=excluded.days,
-                  time_str=excluded.time_str
+                  text=excluded.text, days=excluded.days, time_str=excluded.time_str
             """, (chat_id, text, days_str, time_str))
 
 def delete_reminder(chat_id: int):
@@ -63,16 +61,12 @@ def get_all_reminders():
         with closing(sqlite3.connect(DB_PATH)) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute("SELECT * FROM reminders").fetchall()
-            out = []
-            for row in rows:
-                days = tuple(map(int, row["days"].split(","))) if row["days"] else ()
-                out.append({
-                    "chat_id": row["chat_id"],
-                    "text": row["text"],
-                    "days": days,
-                    "time": row["time_str"]
-                })
-            return out
+            return [{
+                "chat_id": r["chat_id"],
+                "text": r["text"],
+                "days": tuple(map(int, r["days"].split(","))) if r["days"] else (),
+                "time": r["time_str"]
+            } for r in rows]
     except Exception as e:
         logger.error("DB error: %s", e)
         return []
@@ -90,20 +84,17 @@ DAYS_MAP = {
     "нд": 6, "нед": 6, "неділя": 6,
     "щодня": (0,1,2,3,4,5,6), "кожен день": (0,1,2,3,4,5,6),
 }
-
 WEEKDAY_NAMES = ["пн", "вт", "ср", "чт", "пт", "сб", "нд"]
 
 def parse_days(text: str):
-    if not text:
-        return ()
+    if not text: return ()
     words = text.lower().replace(",", " ").replace(";", " ").split()
     days = set()
-    for word in words:
-        word = word.strip(".,:!?")
-        if word in DAYS_MAP:
-            val = DAYS_MAP[word]
-            if isinstance(val, tuple):
-                return val
+    for w in words:
+        w = w.strip(".,:!?")
+        if w in DAYS_MAP:
+            val = DAYS_MAP[w]
+            if isinstance(val, tuple): return val
             days.add(val)
     return tuple(sorted(days)) if days else ()
 
@@ -111,7 +102,6 @@ def parse_days(text: str):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Привіт! Я бот-нагадувач\n\n"
-        "Формат:\n"
         "`/set Текст | дні | HH:MM`\n\n"
         "Приклади:\n"
         "• `/set Урок | пн ср пт | 17:45`\n"
@@ -129,61 +119,47 @@ async def list_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Нагадувань немає")
         return
     days_str = "щодня" if len(r["days"]) == 7 else " ".join(WEEKDAY_NAMES[d] for d in r["days"])
-    await update.message.reply_text(
-        f"Текст: {r['text']}\n"
-        f"Дні: {days_str}\n"
-        f"Час: {r['time']} (Київ)"
-    )
+    await update.message.reply_text(f"Текст: {r['text']}\nДні: {days_str}\nЧас: {r['time']} (Київ)")
 
 async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     delete_reminder(chat_id)
     if context.job_queue:
         for job in context.job_queue.jobs():
-            data = getattr(job, "data", None)
-            if isinstance(data, dict) and data.get("chat_id") == chat_id:
+            if getattr(job, "data", {}).get("chat_id") == chat_id:
                 job.schedule_removal()
     await update.message.reply_text("Нагадування вимкнено")
 
 async def set_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     raw = update.message.text[len("/set"):].strip()
-
     if raw.count("|") != 2:
         await update.message.reply_text("Формат: `/set текст | дні | HH:MM`", parse_mode="Markdown")
         return
 
     text_part, days_part, time_part = [p.strip() for p in raw.split("|", 2)]
 
-    # час
     try:
         hh, mm = map(int, time_part.split(":"))
-        if not (0 <= hh <= 23 and 0 <= mm <= 59):
-            raise ValueError
+        if not (0 <= hh <= 23 and 0 <= mm <= 59): raise ValueError
     except:
         await update.message.reply_text("Час у форматі HH:MM")
         return
 
     days_tuple = parse_days(days_part)
     if not days_tuple:
-        await update.message.reply_text("Не зрозумів дні. Приклади: пн, ср, сб, щодня")
+        await update.message.reply_text("Не зрозумів дні (пн, ср, сб, щодня тощо)")
         return
 
-    # зберігаємо в БД
     save_reminder(chat_id, text_part, days_tuple, f"{hh:02d}:{mm:02d}")
 
-    # видаляємо старі завдання
     if context.job_queue:
         for job in context.job_queue.jobs():
-            data = getattr(job, "data", None)
-            if isinstance(data, dict) and data.get("chat_id") == chat_id:
+            if getattr(job, "data", {}).get("chat_id") == chat_id:
                 job.schedule_removal()
-
-        # створюємо нове
-        job_time = dtime(hour=hh, minute=mm, tzinfo=KYIV_TZ)
         context.job_queue.run_daily(
             callback=send_scheduled,
-            time=job_time,
+            time=dtime(hour=hh, minute=mm, tzinfo=KYIV_TZ),
             days=days_tuple,
             data={"chat_id": chat_id},
             name=f"reminder_{chat_id}"
@@ -191,51 +167,35 @@ async def set_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     days_str = "щодня" if len(days_tuple) == 7 else " ".join(WEEKDAY_NAMES[d] for d in days_tuple)
     await update.message.reply_text(
-        f"Нагадування встановлено!\n\n"
-        f"Текст: {text_part}\n"
-        f"Дні: {days_str}\n"
-        f"Час: {hh:02d}:{mm:02d} (Київ)"
+        f"Нагадування встановлено!\n\nТекст: {text_part}\nДні: {days_str}\nЧас: {hh:02d}:{mm:02d} (Київ)"
     )
 
 async def send_scheduled(context: ContextTypes.DEFAULT_TYPE):
-    job = context.job
-    if not job or not job.data or job.data.get("chat_id") is None:
-        return
-    chat_id = job.data["chat_id"]
-    reminders = [r for r in get_all_reminders() if r["chat_id"] == chat_id]
-    if not reminders:
-        return
-    try:
-        await context.bot.send_message(chat_id=chat_id, text=reminders[0]["text"])
-        logger.info("Надіслано нагадування в %s", chat_id)
-    except Exception as e:
-        logger.error("Не вдалося надіслати в %s: %s", chat_id, e)
+    chat_id = context.job.data["chat_id"]
+    r = next((x for x in get_all_reminders() if x["chat_id"] == chat_id), None)
+    if r:
+        await context.bot.send_message(chat_id=chat_id, text=r["text"])
 
-# ===================== ВІДНОВЛЕННЯ ПІСЛЯ РЕСТАРТУ =====================
 async def post_init(application: Application):
     await application.bot.delete_webhook(drop_pending_updates=True)
-    logger.info("Відновлюю нагадування з бази...")
+    logger.info("Відновлюю нагадування...")
     for r in get_all_reminders():
         try:
             hh, mm = map(int, r["time"].split(":"))
             application.job_queue.run_daily(
-                callback=send_scheduled,
+                send_scheduled,
                 time=dtime(hour=hh, minute=mm, tzinfo=KYIV_TZ),
                 days=r["days"],
                 data={"chat_id": r["chat_id"]},
                 name=f"reminder_{r['chat_id']}"
             )
         except Exception as e:
-            logger.warning("Не вдалося відновити нагадування %s: %s", r["chat_id"], e)
+            logger.warning("Не вдалося відновити %s: %s", r["chat_id"], e)
     logger.info("Відновлено %d нагадувань", len(get_all_reminders()))
 
 # ===================== ЗАПУСК =====================
 def main():
-    app = Application.builder() \
-        .token(TOKEN) \
-        .job_queue(True) \
-        .post_init(post_init) \
-        .build()
+    app = Application.builder().token(TOKEN).post_init(post_init).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("set", set_reminder))
