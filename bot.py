@@ -232,20 +232,15 @@ async def post_init(application: Application):
 # ===================== ЗАПУСК =====================
 
 def main():
-    app = (
-        Application.builder()
-        .token(TOKEN)
-        .job_queue(True)
-        .post_init(post_init)
-        .build()
-    )
+    app = Application.builder().token(TOKEN).post_init(post_init).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("set", set_reminder))
     app.add_handler(CommandHandler("stop", stop))
 
-    logger.info("Бот запущено!")
+    logger.info("Бот запущено – працює в усіх чатах")
     app.run_polling(drop_pending_updates=True)
+
 
 
 if __name__ == "__main__":
